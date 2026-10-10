@@ -266,6 +266,15 @@ data |> count(Zorglijn) |> print()
 # =============================================================================
 
 has_gtsummary <- requireNamespace("gtsummary", quietly = TRUE)
+if (!has_gtsummary) {
+  # Laat zien WAAROM gtsummary niet laadt (niet geïnstalleerd, te oude R, ...)
+  reden <- tryCatch({ loadNamespace("gtsummary"); "onbekend" },
+                    error = function(e) conditionMessage(e))
+  warning("gtsummary kan niet geladen worden, dus de tabellen (en Excel-export) ",
+          "worden overgeslagen. Reden: ", reden,
+          "\nOplossing: install.packages(\"gtsummary\") en R opnieuw starten.",
+          call. = FALSE)
+}
 
 if (has_gtsummary) {
   library(gtsummary)
