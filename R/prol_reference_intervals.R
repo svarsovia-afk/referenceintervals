@@ -570,14 +570,18 @@ plot_validation <- function(plot_df, observed, label) {
                   fill = "95% CI of observed p95"),
               inherit.aes = FALSE, alpha = 0.25) +
     geom_density(colour = "steelblue", linewidth = 0.9) +
+    geom_vline(data = ri_table, aes(xintercept = RI_old, linetype = "Old RI"),
+               colour = "purple4", linewidth = 0.8) +
     geom_vline(data = ri_table, aes(xintercept = RI_new, linetype = "New RI"),
                colour = "black", linewidth = 0.8) +
     geom_vline(data = observed, aes(xintercept = p95, linetype = "Observed p95"),
                colour = "firebrick", linewidth = 0.8) +
     scale_fill_manual(values = c("95% CI of new RI" = "grey40",
                                  "95% CI of observed p95" = "orange"), name = NULL) +
-    scale_linetype_manual(values = c("New RI" = "solid", "Observed p95" = "dashed"), name = NULL) +
-    guides(linetype = guide_legend(override.aes = list(colour = c("black", "firebrick"))),
+    scale_linetype_manual(values = c("Old RI" = "dotted", "New RI" = "solid",
+                                     "Observed p95" = "dashed"),
+                          breaks = c("Old RI", "New RI", "Observed p95"), name = NULL) +
+    guides(linetype = guide_legend(override.aes = list(colour = c("purple4", "black", "firebrick"))),
            fill     = guide_legend(override.aes = list(colour = NA))) +
     facet_wrap(~Status, scales = "free", ncol = 1) +
     labs(title = "Validation of newly established reference intervals",
@@ -607,6 +611,8 @@ p_compare <- ggplot(plot_df_all, aes(x = .data[[value_col]], colour = Populatie)
             aes(xmin = ci_low, xmax = ci_high, ymin = -Inf, ymax = Inf),
             inherit.aes = FALSE, fill = "grey40", alpha = 0.2) +
   geom_density(linewidth = 0.9) +
+  geom_vline(data = ri_table, aes(xintercept = RI_old),
+             colour = "purple4", linetype = "dotted", linewidth = 0.8) +
   geom_vline(data = ri_table, aes(xintercept = RI_new),
              colour = "black", linewidth = 0.8) +
   geom_vline(data = observed_all, aes(xintercept = p95, colour = Populatie),
@@ -616,7 +622,7 @@ p_compare <- ggplot(plot_df_all, aes(x = .data[[value_col]], colour = Populatie)
   facet_wrap(~Status, scales = "free", ncol = 1) +
   labs(title = "PROL distribution per reference population",
        subtitle = paste0(lab_name,
-                         " - solid black: new RI (grey band: 95% CI); dashed: observed p95"),
+                         "\npurple dotted: old RI; solid black: new RI (grey band: 95% CI); dashed: observed p95"),
        x = paste0(value_col, " (ng/mL)"), y = "Density") +
   theme_minimal(base_size = 13) +
   theme(legend.position = "bottom")
