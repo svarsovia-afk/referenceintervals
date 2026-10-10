@@ -9,7 +9,8 @@ rm(list = ls())
 #  1. Data laden en opschonen (getallen, datums, patient-ID)
 #  2. Type_Arts koppelen en indelen in eerste-/tweedelijnszorg
 #  3. Populatietabel
-#  4. Gezonde eerstelijns referentiepopulatie:
+#  4. Gezonde referentiepopulatie — voor ELKE populatie in `populaties`
+#     (standaard: eerstelijnszorg én alle aanvragers zonder filter op aanvrager):
 #       a. TSH/FSH/LH toetsen aan referentie-intervallen
 #       b. ALLE rijen van een patient binnen 1 jaar rond een afwijkende waarde eruit
 #          (gebeurt VOOR het filteren op PROL en VOOR "max 1 test per jaar")
@@ -17,6 +18,7 @@ rm(list = ls())
 #       d. max 1 test per patient per jaar
 #  5. Indeling Men / premenopausal / postmenopausal
 #  6. Validatie nieuwe RI's (observed p95 vs 95%-BI van het nieuwe RI) + figuur
+#     per populatie, plus één vergelijkingsfiguur van de populaties
 #  7. Flagging rate oude vs nieuwe RI's in de ORIGINELE dataset (alle PROL-waarden)
 #
 # install.packages(c("tidyverse", "gtsummary"))   # dplyr >= 1.1.0 vereist
@@ -32,17 +34,25 @@ stopifnot(packageVersion("dplyr") >= "1.1.0")
 # 0. INSTELLINGEN — ALLEEN DIT BLOK AANPASSEN PER LAB
 # =============================================================================
 
-lab_name    <- "MLS"            # "MLS" of "Advent" (alleen voor labels/mapnaam)
-input_file  <- "PROL_TSH.csv"   # Advent: "Datasets/PROL_TSH_W_M_Advent.csv"
-input_sep   <- ";"
-id_col      <- "Unique_Pt_ID"   # Advent: "Pt_ID"
+lab_name    <- "Advent"            # "MLS" of "Advent" (alleen voor labels/mapnaam)
+input_file  <- "Datasets/PROL_advent.csv"   # Advent: "Datasets/PROL_TSH_W_M_Advent.csv"
+input_sep   <- ","
+id_col      <- "Accessionnummer"   # Advent: "Pt_ID"
 date_format <- "%m/%d/%Y"       # controleer per lab!
 
 # Bestand met Aanvrager -> Type_Arts. Wordt alleen gebruikt als de data nog
 # geen kolom "Zorglijn" heeft. Zet op NULL als die kolom er al in staat.
-typearts_file <- "TypeArts.csv"
+typearts_file <- "TypeArts_Advent.csv"
 
 output_dir <- file.path("output", lab_name)
+
+# ---- referentiepopulaties die geanalyseerd worden ----
+# naam = label in grafieken en bestandsnamen; waarde = welke Zorglijn(en)
+# meedoen. NULL = geen filter op aanvrager (alle rijen, ook zonder Zorglijn).
+populaties <- list(
+  "Eerstelijnszorg" = "Eerstelijnszorg",
+  "Alle aanvragers" = NULL
+)
 
 # ---- analyse-instellingen (gelijk voor beide labs) ----
 screening_analytes     <- c("TSH", "FSH", "LH")
@@ -54,13 +64,19 @@ exclude_unclassifiable <- TRUE  # waarde aanwezig maar geen passend ref-interval
 status_levels <- c("Men", "premenopausal", "postmenopausal")
 
 eerstelijns_artsen <- c(
-  "BGD-arts", "Huisarts", "Klinisch Chemicus", "Marine-Arts", "Patient is aanvrager"
+  "BGD-arts", "Huisarts", "Klinisch Chemicus", "Marinearts", "Vliegarts",
+  "Patient is aanvrager"
 )
+
 tweedelijns_artsen <- c(
-  "Cardioloog", "Chirurg", "Gastro-enteroloog", "Gynaecoloog", "Internist",
-  "Internist-nefroloog", "Kinder-cardioloog", "Kinder-longarts", "Kinderarts",
-  "KNO-arts", "Longarts", "Neuroloog", "Oogarts", "Orthopedisch Chirurg",
-  "Plastisch Chirurg", "Psychiater", "Uroloog", "Ziekenhuis"
+  "Anesthesioloog", "Anesthesioloog / pijnspecialist",
+  "Arts-assistent (ANIOS), chirurgie/urologie/orthopedie",
+  "Cardioloog", "Chirurg", "Dermatoloog", "Gastro-enteroloog", "Gynaecoloog",
+  "Internist", "Internist / endocrinoloog", "Internist / infectioloog",
+  "Internist / intensivist", "Internist / nefroloog", "Internist / oncoloog",
+  "Kinder-cardioloog", "Kinder-longarts", "Kinderarts", "KNO-arts", "Longarts",
+  "Neuroloog", "Oogarts", "Orthopedisch Chirurg", "Orthopeed",
+  "Plastisch Chirurg", "Psychiater", "Uroloog", "Ziekenhuis", "Advent", "Verloskundige"
 )
 
 # RI_old = limiet die nu in de routine gebruikt wordt; RI_new = nieuw RI (ng/mL)
@@ -94,6 +110,9 @@ p_percentile <- 0.95
 
 dir.create(output_dir, recursive = TRUE, showWarnings = FALSE)
 out <- function(file) file.path(output_dir, paste0(lab_name, "_", file))
+
+# Populatienaam -> veilig stukje bestandsnaam ("Alle aanvragers" -> "alle_aanvragers")
+file_tag <- function(x) gsub("[^a-z0-9]+", "_", tolower(x))
 
 # Labwaarden robuust naar getal: komma als decimaalteken, spaties, en censored
 # waarden zoals "<0.1" of ">100" (krijgen de grenswaarde).
@@ -141,7 +160,7 @@ assign_status <- function(d) {
     ))
 }
 
-# Exclusie-log (flowchart)
+# Exclusie-log (flowchart); wordt per populatie opnieuw gestart
 flow <- tibble(step = character(), n_rows = integer(), n_patients = integer())
 log_step <- function(df, step) {
   flow <<- bind_rows(flow, tibble(step = step, n_rows = nrow(df),
@@ -187,7 +206,7 @@ if (!"Zorglijn" %in% names(data)) {
     stop("Geen kolom 'Zorglijn' in de data, en geen 'Aanvrager' + typearts_file om hem te maken.")
   }
 
-  TypeArts <- read.csv(typearts_file, sep = ";", stringsAsFactors = FALSE) |>
+  TypeArts <- read.csv(typearts_file, sep = ",", stringsAsFactors = FALSE) |>
     transmute(Aanvrager = trimws(Aanvrager), Type_Arts = trimws(Type_Arts)) |>
     distinct()
 
@@ -243,29 +262,29 @@ if (has_gtsummary) {
         modify_header(label ~ "**Parameter**") |>
         bold_labels()
     )
-  tabel_populatie
+  print(tabel_populatie)
 }
 
 # =============================================================================
-# 4. GEZONDE EERSTELIJNS REFERENTIEPOPULATIE
+# 4 + 5. GEZONDE REFERENTIEPOPULATIE (per populatie)
 # =============================================================================
 
 TSH_reference <- data.frame(
-  Geslacht = c("V", "M", "M", "V", "M", "V", "M", "V", "M", "V"),
-  Age_min  = c(0, 0, 5, 5, 10, 10, 15, 15, 19, 19),
-  Age_max  = c(5, 5, 10, 10, 15, 15, 19, 19, 120, 120),
-  Lower    = c(0.8, 0.8, 1.2, 0.5, 0.8, 0.8, 0.6, 0.4, 0.3, 0.3),
-  Upper    = c(6.2, 6.2, 5.3, 4.8, 4.2, 4.2, 5.4, 2.8, 4.5, 4.5),
+  Geslacht = c("V", "M"),
+  Age_min  = c(19, 19),
+  Age_max  = c(120, 120),
+  Lower    = c(0.27, 0.27),
+  Upper    = c(4.20, 4.20),
   Analyte  = "TSH"
 )
 # caveat: menopauze en menstruele cyclus zijn niet meegenomen!
 LH_reference <- data.frame(
   Geslacht = c("V", "M"), Age_min = c(0, 0), Age_max = c(120, 120),
-  Lower = c(1, 1), Upper = c(77, 8), Analyte = "LH"
+  Lower = c(1, 1.7), Upper = c(95.6, 8.6), Analyte = "LH"
 )
 FSH_reference <- data.frame(
   Geslacht = c("V", "M"), Age_min = c(0, 0), Age_max = c(120, 120),
-  Lower = c(1, 1), Upper = c(153, 11), Analyte = "FSH"
+  Lower = c(1.7, 1.5), Upper = c(134.8, 12.4), Analyte = "FSH"
 )
 reference_intervals <- bind_rows(TSH_reference, FSH_reference, LH_reference)
 write.csv(reference_intervals, out("reference_intervals.csv"), row.names = FALSE)
@@ -276,123 +295,144 @@ reference_join <- reference_intervals |>
   mutate(Age_max_join = if_else(Age_max == max(Age_max), Inf, Age_max)) |>
   ungroup()
 
-# ---- 4.0 eerstelijns + geldige datum ----
-data1 <- data |>
-  filter(Zorglijn == "Eerstelijnszorg") |>
-  log_step("Eerstelijnszorg")
+# Bouwt de gezonde referentiepopulatie voor één selectie van aanvragers.
+#   label    : naam van de populatie (voor log en bestandsnamen)
+#   zorglijn : vector met Zorglijn(en) om te houden, of NULL = geen filter
+build_reference_population <- function(data, label, zorglijn = NULL) {
+  message("\n==== Referentiepopulatie: ", label, " ====")
+  flow <<- flow[0, ]
+  tag <- file_tag(label)
 
-n_bad_date <- sum(is.na(data1$Ontvangstdatum))
-if (n_bad_date > 0) {
-  warning(n_bad_date, " eerstelijns rijen zonder geldige Ontvangstdatum worden verwijderd ",
-          "(controleer date_format).", call. = FALSE)
-}
-data1 <- data1 |>
-  filter(!is.na(Ontvangstdatum), !is.na(Unique_Pt_ID)) |>
-  log_step("Geldige datum en patient-ID")
+  # ---- 4.0 selectie aanvragers + geldige datum ----
+  if (is.null(zorglijn)) {
+    data1 <- data |> log_step("Alle aanvragers (geen filter op aanvrager)")
+  } else {
+    data1 <- data |>
+      filter(Zorglijn %in% zorglijn) |>
+      log_step(paste("Zorglijn:", paste(zorglijn, collapse = " + ")))
+  }
 
-# ---- 4a. elke TSH/FSH/LH-waarde toetsen ----
-df_reference <- data1 |>
-  select(row_id, Unique_Pt_ID, Ontvangstdatum, Geslacht, Age, all_of(screening_analytes)) |>
-  pivot_longer(all_of(screening_analytes), names_to = "Analyte", values_to = "Value") |>
-  left_join(
-    reference_join,
-    by = join_by(Analyte, Geslacht, Age >= Age_min, Age < Age_max_join),
-    relationship = "many-to-one"   # error als een waarde in >1 leeftijdsklasse valt
-  ) |>
-  mutate(status = case_when(
-    is.na(Value)                  ~ "missing",
-    is.na(Lower) | is.na(Upper)   ~ "no_reference",
-    Value < Lower | Value > Upper ~ "abnormal",
-    TRUE                          ~ "normal"
-  ))
+  n_bad_date <- sum(is.na(data1$Ontvangstdatum))
+  if (n_bad_date > 0) {
+    warning(label, ": ", n_bad_date, " rijen zonder geldige Ontvangstdatum worden verwijderd ",
+            "(controleer date_format).", call. = FALSE)
+  }
+  data1 <- data1 |>
+    filter(!is.na(Ontvangstdatum), !is.na(Unique_Pt_ID)) |>
+    log_step("Geldige datum en patient-ID")
 
-count(df_reference, Analyte, status) |> print()
+  # ---- 4a. elke TSH/FSH/LH-waarde toetsen ----
+  df_reference <- data1 |>
+    select(row_id, Unique_Pt_ID, Ontvangstdatum, Geslacht, Age, all_of(screening_analytes)) |>
+    pivot_longer(all_of(screening_analytes), names_to = "Analyte", values_to = "Value") |>
+    left_join(
+      reference_join,
+      by = join_by(Analyte, Geslacht, Age >= Age_min, Age < Age_max_join),
+      relationship = "many-to-one"   # error als een waarde in >1 leeftijdsklasse valt
+    ) |>
+    mutate(status = case_when(
+      is.na(Value)                  ~ "missing",
+      is.na(Lower) | is.na(Upper)   ~ "no_reference",
+      Value < Lower | Value > Upper ~ "abnormal",
+      TRUE                          ~ "normal"
+    ))
 
-# ---- 4b. alle rijen binnen +/- 1 jaar rond een afwijkende waarde eruit ----
-abnormal_events <- df_reference |>
-  filter(status == "abnormal") |>
-  distinct(Unique_Pt_ID, abnormal_date = Ontvangstdatum) |>
-  mutate(win_start = abnormal_date - exclusion_window_days,
-         win_end   = abnormal_date + exclusion_window_days)
+  count(df_reference, Analyte, status) |> print()
 
-rows_near_abnormal <- data1 |>
-  select(row_id, Unique_Pt_ID, Ontvangstdatum) |>
-  inner_join(abnormal_events,
-             by = join_by(Unique_Pt_ID, between(Ontvangstdatum, win_start, win_end))) |>
-  distinct(row_id)
+  # ---- 4b. alle rijen binnen +/- 1 jaar rond een afwijkende waarde eruit ----
+  abnormal_events <- df_reference |>
+    filter(status == "abnormal") |>
+    distinct(Unique_Pt_ID, abnormal_date = Ontvangstdatum) |>
+    mutate(win_start = abnormal_date - exclusion_window_days,
+           win_end   = abnormal_date + exclusion_window_days)
 
-data_clean <- data1 |>
-  anti_join(rows_near_abnormal, by = "row_id") |>
-  log_step(sprintf("Excl. rijen <= %s d rond afwijkende TSH/FSH/LH", exclusion_window_days))
+  rows_near_abnormal <- data1 |>
+    select(row_id, Unique_Pt_ID, Ontvangstdatum) |>
+    inner_join(abnormal_events,
+               by = join_by(Unique_Pt_ID, between(Ontvangstdatum, win_start, win_end))) |>
+    distinct(row_id)
 
-if (exclude_unclassifiable) {
+  data_clean <- data1 |>
+    anti_join(rows_near_abnormal, by = "row_id") |>
+    log_step(sprintf("Excl. rijen <= %s d rond afwijkende TSH/FSH/LH", exclusion_window_days))
+
+  if (exclude_unclassifiable) {
+    data_clean <- data_clean |>
+      anti_join(df_reference |> filter(status == "no_reference") |> distinct(row_id),
+                by = "row_id") |>
+      log_step("Excl. samples zonder passend referentie-interval")
+  }
+
+  # ---- 4c. PROL aanwezig ----
   data_clean <- data_clean |>
-    anti_join(df_reference |> filter(status == "no_reference") |> distinct(row_id),
-              by = "row_id") |>
-    log_step("Excl. samples zonder passend referentie-interval")
+    filter(!is.na(.data[[value_col]])) |>
+    log_step(paste(value_col, "aanwezig"))
+
+  # ---- 4d. max 1 test per patient per jaar ----
+  df_healthy <- data_clean |>
+    arrange(Unique_Pt_ID, Ontvangstdatum, row_id) |>
+    group_by(Unique_Pt_ID) |>
+    filter(keep_one_per_period(Ontvangstdatum, min_days_between)) |>
+    ungroup() |>
+    log_step(sprintf("Max. 1 test per patient per %s d", min_days_between))
+
+  # controles
+  check_abn <- df_healthy |>
+    select(row_id, Unique_Pt_ID, Ontvangstdatum) |>
+    inner_join(abnormal_events,
+               by = join_by(Unique_Pt_ID, between(Ontvangstdatum, win_start, win_end)))
+  stopifnot(nrow(check_abn) == 0)
+
+  check_gap <- df_healthy |>
+    group_by(Unique_Pt_ID) |>
+    summarise(min_gap = if (n() > 1) min(diff(sort(as.numeric(Ontvangstdatum)))) else Inf,
+              .groups = "drop")
+  stopifnot(all(check_gap$min_gap >= min_days_between))
+
+  write.csv(df_healthy |> select(-row_id), out(paste0(tag, "_prol_schoon.csv")),
+            row.names = FALSE)
+
+  # ---- 5. indeling Men / pre- / postmenopausal ----
+  df <- assign_status(df_healthy)
+  count(df, Status) |> print()
+
+  df <- df |>
+    filter(Status %in% status_levels) |>
+    log_step("Volwassen en in te delen in RI-groep")
+
+  write.csv(flow, out(paste0(tag, "_flowchart.csv")), row.names = FALSE)
+
+  df |> mutate(Populatie = label)
 }
 
-# ---- 4c. PROL aanwezig ----
-data_clean <- data_clean |>
-  filter(!is.na(.data[[value_col]])) |>
-  log_step(paste(value_col, "aanwezig"))
-
-# ---- 4d. max 1 test per patient per jaar ----
-df_healthy <- data_clean |>
-  arrange(Unique_Pt_ID, Ontvangstdatum, row_id) |>
-  group_by(Unique_Pt_ID) |>
-  filter(keep_one_per_period(Ontvangstdatum, min_days_between)) |>
-  ungroup() |>
-  log_step(sprintf("Max. 1 test per patient per %s d", min_days_between))
-
-# controles
-check_abn <- df_healthy |>
-  select(row_id, Unique_Pt_ID, Ontvangstdatum) |>
-  inner_join(abnormal_events,
-             by = join_by(Unique_Pt_ID, between(Ontvangstdatum, win_start, win_end)))
-stopifnot(nrow(check_abn) == 0)
-
-check_gap <- df_healthy |>
-  group_by(Unique_Pt_ID) |>
-  summarise(min_gap = if (n() > 1) min(diff(sort(as.numeric(Ontvangstdatum)))) else Inf,
-            .groups = "drop")
-stopifnot(all(check_gap$min_gap >= min_days_between))
-
-write.csv(df_healthy |> select(-row_id), out("eerstelijns_prol_schoon.csv"), row.names = FALSE)
-
-# =============================================================================
-# 5. INDELING MEN / PRE- / POSTMENOPAUSAL
-# =============================================================================
-
-df <- assign_status(df_healthy)
-count(df, Status) |> print()
-
-df <- df |>
-  filter(Status %in% status_levels) |>
-  log_step("Volwassen en in te delen in RI-groep")
-
-write.csv(flow, out("flowchart.csv"), row.names = FALSE)
+ref_pops <- lapply(names(populaties), function(nm) {
+  build_reference_population(data, label = nm, zorglijn = populaties[[nm]])
+})
+names(ref_pops) <- names(populaties)
 
 if (has_gtsummary) {
-  tabel_karakteristieken <- df |>
-    select(Geslacht, Age, PROL, TSH, FSH, LH, Status) |>
-    tbl_strata(
-      strata = Status,
-      .tbl_fun = ~ .x |>
-        tbl_summary(
-          by        = Geslacht,
-          label     = list(Age ~ "Leeftijd"),
-          type      = list(Age ~ "continuous", LH ~ "continuous"),
-          statistic = list(Age ~ "{mean} ± {sd} ({min}–{max})",
-                           LH  ~ "{median} ({p25}–{p75})"),
-          digits    = list(Age ~ 1),
-          missing   = "ifany"
-        ) |>
-        add_overall() |>
-        modify_header(label ~ "**Parameter**") |>
-        bold_labels()
-    )
-  tabel_karakteristieken
+  for (nm in names(ref_pops)) {
+    tabel_karakteristieken <- ref_pops[[nm]] |>
+      select(Geslacht, Age, PROL, TSH, FSH, LH, Status) |>
+      tbl_strata(
+        strata = Status,
+        .tbl_fun = ~ .x |>
+          tbl_summary(
+            by        = Geslacht,
+            label     = list(Age ~ "Leeftijd"),
+            type      = list(Age ~ "continuous", LH ~ "continuous"),
+            statistic = list(Age ~ "{mean} ± {sd} ({min}–{max})",
+                             LH  ~ "{median} ({p25}–{p75})"),
+            digits    = list(Age ~ 1),
+            missing   = "ifany"
+          ) |>
+          add_overall() |>
+          modify_header(label ~ "**Parameter**") |>
+          bold_labels()
+      ) |>
+      modify_caption(paste0("**", nm, "**"))
+    print(tabel_karakteristieken)
+  }
 }
 
 # =============================================================================
@@ -412,53 +452,95 @@ percentile_ci <- function(x, p = 0.95, conf_level = 0.95) {
                  ci_low = x[lower_rank], ci_high = x[upper_rank])
 }
 
-plot_df <- df |> mutate(Status = factor(Status, levels = status_levels))
+# Alle populaties onder elkaar, met Populatie als kolom
+plot_df_all <- bind_rows(ref_pops) |>
+  mutate(Status    = factor(Status, levels = status_levels),
+         Populatie = factor(Populatie, levels = names(populaties)))
 
-observed <- plot_df |>
-  group_by(Status) |>
+observed_all <- plot_df_all |>
+  group_by(Populatie, Status) |>
   reframe(n = sum(!is.na(.data[[value_col]])),
           percentile_ci(.data[[value_col]], p = p_percentile)) |>
   rename(p95 = p_est, p95_ci_low = ci_low, p95_ci_high = ci_high)
 
-ri_check <- ri_table |>
+ri_check <- observed_all |>
+  left_join(ri_table, by = "Status") |>
   left_join(ci_table |> select(Status, ci_low, ci_high), by = "Status") |>
-  left_join(observed, by = "Status") |>
   mutate(
     point_within_RI_CI = p95 >= ci_low & p95 <= ci_high,
     ci_overlap         = p95_ci_low <= ci_high & p95_ci_high >= ci_low,
-    lab                = lab_name,
-    .before = 1
-  )
+    lab                = lab_name
+  ) |>
+  relocate(lab, Populatie, Status, n, RI_new, ci_low, ci_high,
+           p95, p95_ci_low, p95_ci_high, point_within_RI_CI, ci_overlap)
 
 print(ri_check)
 write.csv(ri_check, out("ri_validatie.csv"), row.names = FALSE)
 
-p <- ggplot(plot_df, aes(x = .data[[value_col]])) +
+# ---- 6a. één validatiefiguur per populatie (zelfde opmaak als voorheen) ----
+plot_validation <- function(plot_df, observed, label) {
+  ggplot(plot_df, aes(x = .data[[value_col]])) +
+    geom_rect(data = ci_table,
+              aes(xmin = ci_low, xmax = ci_high, ymin = -Inf, ymax = Inf, fill = "95% CI of new RI"),
+              inherit.aes = FALSE, alpha = 0.25) +
+    geom_rect(data = observed,
+              aes(xmin = p95_ci_low, xmax = p95_ci_high, ymin = -Inf, ymax = Inf,
+                  fill = "95% CI of observed p95"),
+              inherit.aes = FALSE, alpha = 0.25) +
+    geom_density(colour = "steelblue", linewidth = 0.9) +
+    geom_vline(data = ri_table, aes(xintercept = RI_new, linetype = "New RI"),
+               colour = "black", linewidth = 0.8) +
+    geom_vline(data = observed, aes(xintercept = p95, linetype = "Observed p95"),
+               colour = "firebrick", linewidth = 0.8) +
+    scale_fill_manual(values = c("95% CI of new RI" = "grey40",
+                                 "95% CI of observed p95" = "orange"), name = NULL) +
+    scale_linetype_manual(values = c("New RI" = "solid", "Observed p95" = "dashed"), name = NULL) +
+    guides(linetype = guide_legend(override.aes = list(colour = c("black", "firebrick"))),
+           fill     = guide_legend(override.aes = list(colour = NA))) +
+    facet_wrap(~Status, scales = "free", ncol = 1) +
+    labs(title = "Validation of newly established reference intervals",
+         subtitle = paste0(lab_name, " - ", label),
+         x = paste0(value_col, " (ng/mL)"), y = "Density") +
+    theme_minimal(base_size = 13) +
+    theme(legend.position = "bottom", legend.box = "vertical", legend.title = element_blank())
+}
+
+validation_plots <- list()
+for (nm in names(populaties)) {
+  p <- plot_validation(
+    plot_df  = plot_df_all  |> filter(Populatie == nm),
+    observed = observed_all |> filter(Populatie == nm),
+    label    = nm
+  )
+  print(p)
+  ggsave(out(paste0("ri_validatie_", file_tag(nm), ".png")), p, width = 8, height = 10, dpi = 300)
+  validation_plots[[nm]] <- p
+}
+
+# ---- 6b. vergelijking: populaties over elkaar heen ----
+# Grijze band + zwarte lijn = nieuw RI met BI; gekleurde curves en stippellijnen
+# = verdeling en observed p95 per populatie.
+p_compare <- ggplot(plot_df_all, aes(x = .data[[value_col]], colour = Populatie)) +
   geom_rect(data = ci_table,
-            aes(xmin = ci_low, xmax = ci_high, ymin = -Inf, ymax = Inf, fill = "95% CI of new RI"),
-            inherit.aes = FALSE, alpha = 0.25) +
-  geom_rect(data = observed,
-            aes(xmin = p95_ci_low, xmax = p95_ci_high, ymin = -Inf, ymax = Inf,
-                fill = "95% CI of observed p95"),
-            inherit.aes = FALSE, alpha = 0.25) +
-  geom_density(colour = "steelblue", linewidth = 0.9) +
-  geom_vline(data = ri_table, aes(xintercept = RI_new, linetype = "New RI"),
+            aes(xmin = ci_low, xmax = ci_high, ymin = -Inf, ymax = Inf),
+            inherit.aes = FALSE, fill = "grey40", alpha = 0.2) +
+  geom_density(linewidth = 0.9) +
+  geom_vline(data = ri_table, aes(xintercept = RI_new),
              colour = "black", linewidth = 0.8) +
-  geom_vline(data = observed, aes(xintercept = p95, linetype = "Observed p95"),
-             colour = "firebrick", linewidth = 0.8) +
-  scale_fill_manual(values = c("95% CI of new RI" = "grey40",
-                               "95% CI of observed p95" = "orange"), name = NULL) +
-  scale_linetype_manual(values = c("New RI" = "solid", "Observed p95" = "dashed"), name = NULL) +
-  guides(linetype = guide_legend(override.aes = list(colour = c("black", "firebrick"))),
-         fill     = guide_legend(override.aes = list(colour = NA))) +
+  geom_vline(data = observed_all, aes(xintercept = p95, colour = Populatie),
+             linetype = "dashed", linewidth = 0.8) +
+  scale_colour_manual(values = c("steelblue", "darkorange", "forestgreen", "purple")[
+    seq_along(populaties)], name = NULL) +
   facet_wrap(~Status, scales = "free", ncol = 1) +
-  labs(title = paste0("Validation of newly established reference intervals (", lab_name, ")"),
+  labs(title = "PROL distribution per reference population",
+       subtitle = paste0(lab_name,
+                         " - solid black: new RI (grey band: 95% CI); dashed: observed p95"),
        x = paste0(value_col, " (ng/mL)"), y = "Density") +
   theme_minimal(base_size = 13) +
-  theme(legend.position = "bottom", legend.box = "vertical", legend.title = element_blank())
+  theme(legend.position = "bottom")
 
-p
-ggsave(out("ri_validatie.png"), p, width = 8, height = 10, dpi = 300)
+p_compare
+ggsave(out("ri_validatie_vergelijking_populaties.png"), p_compare, width = 8, height = 10, dpi = 300)
 
 # =============================================================================
 # 7. FLAGGING RATE IN DE ORIGINELE DATASET (alle PROL-waarden, geen filtering)
