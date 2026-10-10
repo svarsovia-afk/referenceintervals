@@ -114,6 +114,31 @@ out <- function(file) file.path(output_dir, paste0(lab_name, "_", file))
 # Populatienaam -> veilig stukje bestandsnaam ("Alle aanvragers" -> "alle_aanvragers")
 file_tag <- function(x) gsub("[^a-z0-9]+", "_", tolower(x))
 
+# gtsummary-tabel opslaan als Excel-bestand.
+# Voorkeur: as_hux_xlsx() (behoudt kopjes per strata en vetgedrukte labels;
+# vereist install.packages(c("huxtable", "openxlsx"))).
+# Anders: platte tabel via writexl (install.packages("writexl")).
+save_table_excel <- function(tbl, file) {
+  tryCatch({
+    if (requireNamespace("huxtable", quietly = TRUE) &&
+        requireNamespace("openxlsx", quietly = TRUE)) {
+      gtsummary::as_hux_xlsx(tbl, file = file)
+    } else if (requireNamespace("writexl", quietly = TRUE)) {
+      tab <- tryCatch(tibble::as_tibble(tbl, col_labels = TRUE),
+                      error = function(e) tibble::as_tibble(tbl, col_labels = FALSE))
+      clean <- function(x) trimws(gsub("\\s*\n\\s*", " ", gsub("\\*\\*|__", "", x)))
+      names(tab) <- make.unique(clean(names(tab)))
+      tab <- tab |> mutate(across(everything(), ~ clean(as.character(.x))))
+      writexl::write_xlsx(tab, file)
+    } else {
+      stop('installeer "huxtable" + "openxlsx", of "writexl"')
+    }
+    message("Tabel opgeslagen: ", file)
+  }, error = function(e) {
+    warning("Tabel niet opgeslagen als Excel (", file, "): ", conditionMessage(e), call. = FALSE)
+  })
+}
+
 # Labwaarden robuust naar getal: komma als decimaalteken, spaties, en censored
 # waarden zoals "<0.1" of ">100" (krijgen de grenswaarde).
 to_numeric_lab <- function(x, name = "") {
@@ -263,6 +288,7 @@ if (has_gtsummary) {
         bold_labels()
     )
   print(tabel_populatie)
+  save_table_excel(tabel_populatie, out("tabel_populatie.xlsx"))
 }
 
 # =============================================================================
@@ -432,6 +458,8 @@ if (has_gtsummary) {
       ) |>
       modify_caption(paste0("**", nm, "**"))
     print(tabel_karakteristieken)
+    save_table_excel(tabel_karakteristieken,
+                     out(paste0("tabel_karakteristieken_", file_tag(nm), ".xlsx")))
   }
 }
 
