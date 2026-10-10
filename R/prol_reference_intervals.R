@@ -8,7 +8,7 @@ rm(list = ls())
 #
 #  1. Data laden en opschonen (getallen, datums, patient-ID)
 #  2. Type_Arts koppelen en indelen in eerste-/tweedelijnszorg
-#  3. Populatietabel
+#  3. Populatiebeschrijving (Excel-tabel, klaar voor publicatie)
 #  4. Gezonde referentiepopulatie — voor ELKE populatie in `populaties`
 #     (standaard: eerstelijnszorg én alle aanvragers zonder filter op aanvrager):
 #       a. TSH/FSH/LH toetsen aan referentie-intervallen
@@ -21,7 +21,7 @@ rm(list = ls())
 #     per populatie, plus één vergelijkingsfiguur van de populaties
 #  7. Flagging rate oude vs nieuwe RI's in de ORIGINELE dataset (alle PROL-waarden)
 #
-# install.packages(c("tidyverse", "gtsummary"))   # dplyr >= 1.1.0 vereist
+# install.packages(c("tidyverse", "openxlsx"))   # dplyr >= 1.1.0 vereist
 # =============================================================================
 
 library(dplyr)
@@ -82,9 +82,9 @@ tweedelijns_artsen <- c(
 # RI_old = limiet die nu in de routine gebruikt wordt; RI_new = nieuw RI (ng/mL)
 ri_table <- tibble::tribble(
   ~Status,           ~RI_old, ~RI_new,
-  "Men",              17.0,    25.9,
-  "premenopausal",    37.0,    40.6,
-  "postmenopausal",   37.0,    27.8
+  "Men",              25,    25.9,
+  "premenopausal",    18.3,    40.6,
+  "postmenopausal",   12.55,    27.8
 ) |>
   mutate(Status = factor(Status, levels = status_levels))
 
@@ -104,6 +104,18 @@ ci_table <- tibble::tribble(
 
 p_percentile <- 0.95
 
+# ---- populatietabel (Excel) ----
+# Analyten in de tabel, met eenheid en aantal decimalen
+table_analytes <- tibble::tribble(
+  ~analyte, ~unit,    ~digits,
+  "PROL",   "ng/mL",  1,
+  "TSH",    "mU/L",   2,
+  "FSH",    "U/L",    1,
+  "LH",     "U/L",    1
+)
+status_labels <- c(Men = "Men", premenopausal = "Premenopausal women",
+                   postmenopausal = "Postmenopausal women")
+
 # =============================================================================
 # HULPFUNCTIES
 # =============================================================================
@@ -114,29 +126,98 @@ out <- function(file) file.path(output_dir, paste0(lab_name, "_", file))
 # Populatienaam -> veilig stukje bestandsnaam ("Alle aanvragers" -> "alle_aanvragers")
 file_tag <- function(x) gsub("[^a-z0-9]+", "_", tolower(x))
 
-# gtsummary-tabel opslaan als Excel-bestand.
-# Voorkeur: as_hux_xlsx() (behoudt kopjes per strata en vetgedrukte labels;
-# vereist install.packages(c("huxtable", "openxlsx"))).
-# Anders: platte tabel via writexl (install.packages("writexl")).
-save_table_excel <- function(tbl, file) {
-  tryCatch({
-    if (requireNamespace("huxtable", quietly = TRUE) &&
-        requireNamespace("openxlsx", quietly = TRUE)) {
-      gtsummary::as_hux_xlsx(tbl, file = file)
-    } else if (requireNamespace("writexl", quietly = TRUE)) {
-      tab <- tryCatch(tibble::as_tibble(tbl, col_labels = TRUE),
-                      error = function(e) tibble::as_tibble(tbl, col_labels = FALSE))
-      clean <- function(x) trimws(gsub("\\s*\n\\s*", " ", gsub("\\*\\*|__", "", x)))
-      names(tab) <- make.unique(clean(names(tab)))
-      tab <- tab |> mutate(across(everything(), ~ clean(as.character(.x))))
-      writexl::write_xlsx(tab, file)
-    } else {
-      stop('installeer "huxtable" + "openxlsx", of "writexl"')
+# ---- beschrijvende tabel ----
+fmt_num <- function(x, d) formatC(x, format = "f", digits = d)
+
+# Eén kolom van de tabel: samenvatting van één groep
+summarise_group <- function(d, include_sex = TRUE) {
+  n   <- nrow(d)
+  age <- d$Age[!is.na(d$Age)]
+  rows <- c()
+  if (include_sex) {
+    n_m <- sum(d$Geslacht == "M", na.rm = TRUE)
+    rows["Sex, male, n (%)"] <- sprintf("%d (%s)", n_m, fmt_num(100 * n_m / n, 1))
+  }
+  rows["Age (years), mean [range]"] <- if (length(age) == 0) "\u2013" else
+    sprintf("%s [%s\u2013%s]", fmt_num(mean(age), 1), fmt_num(min(age), 0), fmt_num(max(age), 0))
+  rows["Age (years), median"] <- if (length(age) == 0) "\u2013" else fmt_num(median(age), 1)
+
+  for (i in seq_len(nrow(table_analytes))) {
+    a <- table_analytes$analyte[i]
+    dg <- table_analytes$digits[i]
+    x <- d[[a]][!is.na(d[[a]])]
+    label <- sprintf("%s (%s), median [Q1\u2013Q3]", a, table_analytes$unit[i])
+    val <- if (length(x) == 0) "\u2013" else {
+      q <- quantile(x, c(0.25, 0.5, 0.75), names = FALSE)
+      sprintf("%s [%s\u2013%s]", fmt_num(q[2], dg), fmt_num(q[1], dg), fmt_num(q[3], dg))
     }
-    message("Tabel opgeslagen: ", file)
-  }, error = function(e) {
-    warning("Tabel niet opgeslagen als Excel (", file, "): ", conditionMessage(e), call. = FALSE)
-  })
+    # aantal meetwaarden vermelden als niet iedereen deze analyt heeft
+    if (length(x) > 0 && length(x) < n) val <- sprintf("%s (n = %d)", val, length(x))
+    rows[label] <- val
+  }
+  rows
+}
+
+# Tabel: rijen = parameters, kolommen = groepen + Total (kop bevat n)
+describe_population <- function(d, group_col, group_levels = NULL, group_labels = NULL,
+                                include_sex = TRUE, total_label = "Total") {
+  g <- as.character(d[[group_col]])
+  g[is.na(g)] <- "Unknown"
+  if (is.null(group_levels)) group_levels <- sort(unique(g))
+  group_levels <- intersect(c(group_levels, "Unknown"), unique(g))
+
+  groups <- c(lapply(setNames(group_levels, group_levels), function(l) d[g == l, , drop = FALSE]),
+              setNames(list(d), total_label))
+  cols <- lapply(groups, summarise_group, include_sex = include_sex)
+
+  tab <- tibble::tibble(Characteristic = names(cols[[1]]))
+  for (nm in names(groups)) {
+    lab <- if (!is.null(group_labels) && nm %in% names(group_labels)) group_labels[[nm]] else nm
+    tab[[sprintf("%s (n = %d)", lab, nrow(groups[[nm]]))]] <- unname(cols[[nm]])
+  }
+  tab
+}
+
+# Lijst met tabellen -> één Excel-bestand, één tabblad per tabel
+write_publication_tables <- function(tables, file, note) {
+  if (requireNamespace("openxlsx", quietly = TRUE)) {
+    wb <- openxlsx::createWorkbook()
+    header_style <- openxlsx::createStyle(textDecoration = "bold", border = "TopBottom",
+                                          halign = "center", wrapText = TRUE)
+    first_col    <- openxlsx::createStyle(halign = "left")
+    for (nm in names(tables)) {
+      sheet <- substr(gsub("[\\[\\]\\*\\?/\\\\:]", "", nm), 1, 31)
+      tab <- tables[[nm]]
+      openxlsx::addWorksheet(wb, sheet)
+      title <- if (!is.null(attr(tab, "title"))) attr(tab, "title") else nm
+      openxlsx::writeData(wb, sheet, title, startRow = 1)
+      openxlsx::addStyle(wb, sheet, openxlsx::createStyle(textDecoration = "bold"), rows = 1, cols = 1)
+      openxlsx::writeData(wb, sheet, tab, startRow = 3, headerStyle = header_style)
+      openxlsx::addStyle(wb, sheet, openxlsx::createStyle(border = "Bottom"),
+                         rows = nrow(tab) + 3, cols = seq_len(ncol(tab)), stack = TRUE)
+      openxlsx::addStyle(wb, sheet, first_col, rows = 4:(nrow(tab) + 3), cols = 1, stack = TRUE)
+      openxlsx::addStyle(wb, sheet, openxlsx::createStyle(halign = "center"),
+                         rows = 4:(nrow(tab) + 3), cols = 2:ncol(tab),
+                         gridExpand = TRUE, stack = TRUE)
+      openxlsx::writeData(wb, sheet, note, startRow = nrow(tab) + 5)
+      openxlsx::addStyle(wb, sheet, openxlsx::createStyle(textDecoration = "italic"),
+                         rows = nrow(tab) + 5, cols = 1)
+      openxlsx::setColWidths(wb, sheet, cols = 1, widths = 34)
+      openxlsx::setColWidths(wb, sheet, cols = 2:ncol(tab), widths = 24)
+    }
+    openxlsx::saveWorkbook(wb, file, overwrite = TRUE)
+  } else if (requireNamespace("writexl", quietly = TRUE)) {
+    writexl::write_xlsx(tables, file)
+  } else {
+    warning("Installeer 'openxlsx' (of 'writexl') voor Excel-uitvoer; tabellen opgeslagen als CSV.",
+            call. = FALSE)
+    for (nm in names(tables)) {
+      write.csv(tables[[nm]], sub("\\.xlsx$", paste0("_", file_tag(nm), ".csv"), file),
+                row.names = FALSE)
+    }
+    return(invisible(NULL))
+  }
+  message("Populatietabellen opgeslagen: ", file)
 }
 
 # Labwaarden robuust naar getal: komma als decimaalteken, spaties, en censored
@@ -265,40 +346,16 @@ data |> count(Zorglijn) |> print()
 # 3. POPULATIETABEL
 # =============================================================================
 
-has_gtsummary <- requireNamespace("gtsummary", quietly = TRUE)
-if (!has_gtsummary) {
-  # Laat zien WAAROM gtsummary niet laadt (niet geïnstalleerd, te oude R, ...)
-  reden <- tryCatch({ loadNamespace("gtsummary"); "onbekend" },
-                    error = function(e) conditionMessage(e))
-  warning("gtsummary kan niet geladen worden, dus de tabellen (en Excel-export) ",
-          "worden overgeslagen. Reden: ", reden,
-          "\nOplossing: install.packages(\"gtsummary\") en R opnieuw starten.",
-          call. = FALSE)
-}
-
-if (has_gtsummary) {
-  library(gtsummary)
-  tabel_populatie <- data |>
-    filter(Zorglijn %in% c("Eerstelijnszorg", "Tweedelijnszorg")) |>
-    select(Geslacht, Zorglijn, Age, PROL, TSH, FSH, LH) |>
-    tbl_strata(
-      strata = Zorglijn,
-      .tbl_fun = ~ .x |>
-        tbl_summary(
-          by        = Geslacht,
-          label     = list(Age ~ "Leeftijd"),
-          type      = list(Age ~ "continuous"),
-          statistic = list(Age ~ "{mean}"),
-          digits    = list(Age ~ 1),
-          missing   = "ifany"
-        ) |>
-        add_overall() |>
-        modify_header(label ~ "**Parameter**") |>
-        bold_labels()
-    )
-  print(tabel_populatie)
-  save_table_excel(tabel_populatie, out("tabel_populatie.xlsx"))
-}
+# Hele dataset (alle PROL-aanvragen), per zorglijn + totaal
+pub_tables <- list()
+pub_tables[["All requests"]] <- data |>
+  filter(!is.na(.data[[value_col]])) |>
+  describe_population("Zorglijn",
+                      group_levels = c("Eerstelijnszorg", "Tweedelijnszorg"),
+                      group_labels = c(Eerstelijnszorg = "Primary care",
+                                       Tweedelijnszorg = "Secondary care"))
+attr(pub_tables[["All requests"]], "title") <- "Study population: all requests with a PROL result"
+print(pub_tables[[1]], width = Inf)
 
 # =============================================================================
 # 4 + 5. GEZONDE REFERENTIEPOPULATIE (per populatie)
@@ -445,32 +502,20 @@ ref_pops <- lapply(names(populaties), function(nm) {
 })
 names(ref_pops) <- names(populaties)
 
-if (has_gtsummary) {
-  for (nm in names(ref_pops)) {
-    tabel_karakteristieken <- ref_pops[[nm]] |>
-      select(Geslacht, Age, PROL, TSH, FSH, LH, Status) |>
-      tbl_strata(
-        strata = Status,
-        .tbl_fun = ~ .x |>
-          tbl_summary(
-            by        = Geslacht,
-            label     = list(Age ~ "Leeftijd"),
-            type      = list(Age ~ "continuous", LH ~ "continuous"),
-            statistic = list(Age ~ "{mean} ± {sd} ({min}–{max})",
-                             LH  ~ "{median} ({p25}–{p75})"),
-            digits    = list(Age ~ 1),
-            missing   = "ifany"
-          ) |>
-          add_overall() |>
-          modify_header(label ~ "**Parameter**") |>
-          bold_labels()
-      ) |>
-      modify_caption(paste0("**", nm, "**"))
-    print(tabel_karakteristieken)
-    save_table_excel(tabel_karakteristieken,
-                     out(paste0("tabel_karakteristieken_", file_tag(nm), ".xlsx")))
-  }
+# Referentiepopulatie per RI-groep + totaal, één tabblad per populatie
+for (nm in names(ref_pops)) {
+  tab <- describe_population(ref_pops[[nm]], "Status",
+                             group_levels = status_levels, group_labels = status_labels,
+                             include_sex = FALSE)
+  attr(tab, "title") <- paste0("Reference population: ", nm)
+  pub_tables[[paste("Ref -", nm)]] <- tab
+  print(tab, width = Inf)
 }
+
+write_publication_tables(
+  pub_tables, out("populatiebeschrijving.xlsx"),
+  note = "Values are n (%), mean [range], or median [Q1\u2013Q3]. n = number of results when not available for all subjects."
+)
 
 # =============================================================================
 # 6. VALIDATIE NIEUWE RI'S: observed p95 (met BI) vs 95%-BI van het nieuwe RI
