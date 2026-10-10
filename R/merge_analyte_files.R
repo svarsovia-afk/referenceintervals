@@ -10,6 +10,9 @@
 #        * Leeftijd gelijk     -> één rij, één kolom Leeftijd
 #        * Leeftijd verschilt  -> aparte rij per leeftijd voor dat Accessionnummer
 #   - Kolommen PROL, LH, FSH, TSH staan naast elkaar.
+#   - Aanvrager uit LH/FSH/TSH: is die gelijk, dan één kolom Aanvrager. Wijkt
+#     een analyt af, dan krijgt die een extra kolom (bv. Aanvrager_TSH) met de
+#     afwijkende aanvrager voor die rij.
 #   - Accessionnummers waar Geslacht niet overeenkomt worden NIET gekoppeld en
 #     worden apart weggeschreven ter controle.
 # =============================================================================
@@ -29,6 +32,7 @@ input_sep   <- ";"
 acc_col     <- "Accessionnummer"
 sex_col     <- "Geslacht"
 age_col     <- "Leeftijd"
+aanvrager_col <- "Aanvrager"
 output_file <- "PROL_LH_FSH_TSH_merged.csv"
 
 analytes <- c("PROL", "LH", "FSH", "TSH")   # volgorde van de kolommen
@@ -63,7 +67,21 @@ read_analyte <- function(analyte, cfg, keep_other_cols = FALSE) {
     ) |>
     filter(!is.na(Accessionnummer), Accessionnummer != "")
 
-  if (!keep_other_cols) d <- d |> select(Accessionnummer, Geslacht, Leeftijd, all_of(analyte))
+  if (!keep_other_cols) {
+    # Aanvrager meenemen als Aanvrager_<analyt>
+    aanvr_name <- paste0("Aanvrager_", analyte)
+    if (aanvrager_col %in% names(d)) {
+      d[[aanvr_name]] <- trimws(d[[aanvrager_col]])
+      d[[aanvr_name]][d[[aanvr_name]] == ""] <- NA
+    } else {
+      warning(cfg$file, ": geen kolom '", aanvrager_col, "'; Aanvrager wordt NA", call. = FALSE)
+      d[[aanvr_name]] <- NA_character_
+    }
+    d <- d |> select(Accessionnummer, Geslacht, Leeftijd, all_of(analyte), all_of(aanvr_name))
+  } else if (aanvrager_col %in% names(d)) {
+    # Aanvrager uit het basisbestand apart houden
+    d <- d |> rename(Aanvrager_PROL = all_of(aanvrager_col))
+  }
 
   # exact dubbele rijen weg; resterende dubbelingen melden
   n_before <- nrow(d)
@@ -138,6 +156,13 @@ merged <- prol |>
   # Leeftijd uit LH/FSH/TSH; als die er niet is, die van PROL
   mutate(Leeftijd = coalesce(Leeftijd, Leeftijd_PROL)) |>
   relocate(Accessionnummer, Geslacht, Leeftijd, all_of(analytes)) |>
+  # Aanvrager: eerste bekende uit LH/FSH/TSH. De per-analyt kolom blijft alleen
+  # gevuld als die aanvrager daarvan afwijkt.
+  mutate(Aanvrager = coalesce(Aanvrager_LH, Aanvrager_FSH, Aanvrager_TSH),
+         across(c(Aanvrager_LH, Aanvrager_FSH, Aanvrager_TSH),
+                ~ if_else(!is.na(.x) & .x != Aanvrager, .x, NA_character_))) |>
+  relocate(Aanvrager, any_of(c("Aanvrager_LH", "Aanvrager_FSH", "Aanvrager_TSH")),
+           .after = TSH) |>
   arrange(Accessionnummer, Leeftijd)
 
 # PROL-leeftijd alleen bewaren als die ergens afwijkt
@@ -145,6 +170,14 @@ if (all(is.na(merged$Leeftijd_PROL) | merged$Leeftijd_PROL == merged$Leeftijd)) 
   merged <- merged |> select(-Leeftijd_PROL)
 } else {
   message("Let op: Leeftijd in PROL wijkt soms af van LH/FSH/TSH; kolom Leeftijd_PROL behouden.")
+}
+
+# Aanvrager_<analyt> alleen behouden als er ergens een afwijkende aanvrager is
+aanvr_cols <- c("Aanvrager_LH", "Aanvrager_FSH", "Aanvrager_TSH")
+aanvr_differs <- aanvr_cols[colSums(!is.na(merged[aanvr_cols])) > 0]
+merged <- merged |> select(-all_of(setdiff(aanvr_cols, aanvr_differs)))
+if (length(aanvr_differs) > 0) {
+  message("Afwijkende aanvrager gevonden voor: ", paste(aanvr_differs, collapse = ", "))
 }
 
 # ---- 5. Controles en export -------------------------------------------------
