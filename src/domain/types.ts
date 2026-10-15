@@ -128,6 +128,8 @@ export type OptionalDecision = "undecided" | "activated" | "skipped";
 
 export interface StepState {
   stepNo: number;
+  /** Responsible stakeholder for the step as a whole (falls back to the main task owner). */
+  ownerId?: string;
   approvedScore: number;
   notApplicable: boolean;
   naReason?: string;

@@ -41,7 +41,7 @@ export type Action =
   | { type: "option.add"; roadmapId: string; option: PreventionOption }
   | { type: "option.update"; roadmapId: string; option: PreventionOption }
   | { type: "option.remove"; roadmapId: string; optionId: string }
-  | { type: "step.update"; roadmapId: string; stepNo: number; patch: Partial<Pick<StepState, "summary" | "uncertainties" | "sources" | "customDescription" | "optionAssessments">> }
+  | { type: "step.update"; roadmapId: string; stepNo: number; patch: Partial<Pick<StepState, "ownerId" | "summary" | "uncertainties" | "sources" | "customDescription" | "optionAssessments">> }
   | { type: "procurement.update"; roadmapId: string; patch: Partial<ProcurementInfo> }
   | { type: "pathway.set"; roadmapId: string; pathway: Pathway; preferredOptionIds?: string[]; handover?: CurativeHandover; changeReason?: string }
   | { type: "step.optionalDecision"; roadmapId: string; stepNo: number; decision: OptionalDecision; reason: string }
@@ -170,7 +170,11 @@ export function applyAction(state: AppState, action: Action, actorId: string, no
       const st = r && stepOf(r, action.stepNo);
       if (!r || !st) return fail("generic");
       if (!can("roadmap.edit") && !ownsStepWork(r.id, action.stepNo)) return fail("permission");
-      const keys = Object.keys(action.patch);
+      if (action.patch.ownerId !== undefined && action.patch.ownerId !== st.ownerId) {
+        if (!can("task.assign")) return fail("permission");
+        log({ action: "task.assigned", objectType: "step", objectId: `${r.id}:${st.stepNo}`, objectLabel: stepLabel(r, st.stepNo), roadmapId: r.id, previous: st.ownerId ?? "-", next: action.patch.ownerId || "-" });
+      }
+      const keys = Object.keys(action.patch).filter((k) => k !== "ownerId");
       Object.assign(st, action.patch);
       log({ action: "step.updated", objectType: "step", objectId: `${r.id}:${st.stepNo}`, objectLabel: stepLabel(r, st.stepNo), roadmapId: r.id, next: keys.join(", ") });
       return done();
