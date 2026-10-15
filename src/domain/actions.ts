@@ -172,11 +172,11 @@ export function applyAction(state: AppState, action: Action, actorId: string, no
       if (!can("roadmap.edit") && !ownsStepWork(r.id, action.stepNo)) return fail("permission");
       if (action.patch.ownerId !== undefined && action.patch.ownerId !== st.ownerId) {
         if (!can("task.assign")) return fail("permission");
-        log({ action: "task.assigned", objectType: "step", objectId: `${r.id}:${st.stepNo}`, objectLabel: stepLabel(r, st.stepNo), roadmapId: r.id, previous: st.ownerId ?? "-", next: action.patch.ownerId || "-" });
+        log({ action: "task.assigned", objectType: "step", objectId: `${r.id}:${st.stepNo}`, objectLabel: stepLabel(r, st.stepNo), stepNo: st.stepNo, roadmapId: r.id, previous: st.ownerId ?? "-", next: action.patch.ownerId || "-" });
       }
       const keys = Object.keys(action.patch).filter((k) => k !== "ownerId");
       Object.assign(st, action.patch);
-      log({ action: "step.updated", objectType: "step", objectId: `${r.id}:${st.stepNo}`, objectLabel: stepLabel(r, st.stepNo), roadmapId: r.id, next: keys.join(", ") });
+      log({ action: "step.updated", objectType: "step", objectId: `${r.id}:${st.stepNo}`, objectLabel: stepLabel(r, st.stepNo), stepNo: st.stepNo, roadmapId: r.id, next: keys.join(", ") });
       return done();
     }
 
@@ -185,7 +185,7 @@ export function applyAction(state: AppState, action: Action, actorId: string, no
       if (!r) return fail("generic");
       if (!can("roadmap.edit") && !ownsStepWork(r.id, 4)) return fail("permission");
       Object.assign(r.procurement, action.patch);
-      log({ action: "step.updated", objectType: "step", objectId: `${r.id}:4`, objectLabel: stepLabel(r, 4), roadmapId: r.id, next: Object.keys(action.patch).join(", ") });
+      log({ action: "step.updated", objectType: "step", objectId: `${r.id}:4`, objectLabel: stepLabel(r, 4), stepNo: 4, roadmapId: r.id, next: Object.keys(action.patch).join(", ") });
       return done();
     }
 
@@ -217,7 +217,7 @@ export function applyAction(state: AppState, action: Action, actorId: string, no
       }
       if (action.pathway === "curative") {
         log({ action: "handover.updated", objectType: "roadmap", objectId: r.id, objectLabel: r.disease.nl, roadmapId: r.id, next: action.handover?.records.map((h) => h.recipient).join(", "), reason: action.handover?.naReason });
-        log({ action: "step.markedNotApplicable", objectType: "step", objectId: `${r.id}:4-9`, objectLabel: stepLabel(r, 4) + "–9", roadmapId: r.id, reason: action.handover?.naReason });
+        log({ action: "step.markedNotApplicable", objectType: "step", objectId: `${r.id}:4-9`, objectLabel: stepLabel(r, 4) + "–9", stepNo: 4, roadmapId: r.id, reason: action.handover?.naReason });
       }
       if (prevPreferred !== r.preferredOptionIds.join(",")) {
         log({ action: "preferredOptions.changed", objectType: "roadmap", objectId: r.id, objectLabel: r.disease.nl, roadmapId: r.id, previous: prevPreferred, next: r.preferredOptionIds.join(",") });
@@ -234,7 +234,7 @@ export function applyAction(state: AppState, action: Action, actorId: string, no
       if (err) return fail(err);
       const prev = st.optionalDecision ?? "undecided";
       Object.assign(st, applyOptionalDecision(st, action.decision, action.reason));
-      log({ action: "step.optionalDecision", objectType: "step", objectId: `${r.id}:${st.stepNo}`, objectLabel: stepLabel(r, st.stepNo), roadmapId: r.id, previous: prev, next: action.decision, reason: action.reason });
+      log({ action: "step.optionalDecision", objectType: "step", objectId: `${r.id}:${st.stepNo}`, objectLabel: stepLabel(r, st.stepNo), stepNo: st.stepNo, roadmapId: r.id, previous: prev, next: action.decision, reason: action.reason });
       return done();
     }
 
@@ -260,7 +260,7 @@ export function applyAction(state: AppState, action: Action, actorId: string, no
         action: "deliberation.updated",
         objectType: "deliberation",
         objectId: `${r.id}:${st.stepNo}`,
-        objectLabel: stepLabel(r, st.stepNo),
+        objectLabel: stepLabel(r, st.stepNo), stepNo: st.stepNo,
         roadmapId: r.id,
         previous: prev ? `${prev.date ?? "-"} · held=${prev.held} · n=${prev.participantIds.length}` : undefined,
         next: `${action.deliberation.date ?? "-"} · held=${action.deliberation.held} · n=${action.deliberation.participantIds.length}`,
@@ -340,7 +340,7 @@ export function applyAction(state: AppState, action: Action, actorId: string, no
         proposedAt: nowIso,
         status: "proposed",
       });
-      log({ action: "score.proposed", objectType: "score", objectId: id, objectLabel: stepLabel(r, action.stepNo), roadmapId: r.id, previous: String(st.approvedScore), next: String(action.score), reason: action.note || undefined });
+      log({ action: "score.proposed", objectType: "score", objectId: id, objectLabel: stepLabel(r, action.stepNo), stepNo: action.stepNo, roadmapId: r.id, previous: String(st.approvedScore), next: String(action.score), reason: action.note || undefined });
       return done(id);
     }
 
@@ -355,7 +355,7 @@ export function applyAction(state: AppState, action: Action, actorId: string, no
       p.reviewedAt = nowIso;
       p.reviewNote = action.note;
       const r = roadmapById(p.roadmapId)!;
-      log({ action: action.decision === "reviewed" ? "score.reviewed" : "score.returned", objectType: "score", objectId: p.id, objectLabel: stepLabel(r, p.stepNo), roadmapId: r.id, previous: "proposed", next: action.decision, reason: action.note || undefined });
+      log({ action: action.decision === "reviewed" ? "score.reviewed" : "score.returned", objectType: "score", objectId: p.id, objectLabel: stepLabel(r, p.stepNo), stepNo: p.stepNo, roadmapId: r.id, previous: "proposed", next: action.decision, reason: action.note || undefined });
       return done();
     }
 
@@ -372,7 +372,7 @@ export function applyAction(state: AppState, action: Action, actorId: string, no
         p.approvalNote = action.note;
         p.approvedBy = actorId;
         p.approvedAt = nowIso;
-        log({ action: "score.returned", objectType: "score", objectId: p.id, objectLabel: stepLabel(r, p.stepNo), roadmapId: r.id, previous: "reviewed", next: "returned", reason: action.note });
+        log({ action: "score.returned", objectType: "score", objectId: p.id, objectLabel: stepLabel(r, p.stepNo), stepNo: p.stepNo, roadmapId: r.id, previous: "reviewed", next: "returned", reason: action.note });
         return done();
       }
       if (st.notApplicable) return fail("notApplicable");
@@ -385,7 +385,7 @@ export function applyAction(state: AppState, action: Action, actorId: string, no
       p.approvedAt = nowIso;
       p.approvalNote = action.note;
       st.approvedScore = p.proposedScore;
-      log({ action: "score.approved", objectType: "score", objectId: p.id, objectLabel: stepLabel(r, p.stepNo), roadmapId: r.id, previous: String(prev), next: String(p.proposedScore), reason: action.note || undefined });
+      log({ action: "score.approved", objectType: "score", objectId: p.id, objectLabel: stepLabel(r, p.stepNo), stepNo: p.stepNo, roadmapId: r.id, previous: String(prev), next: String(p.proposedScore), reason: action.note || undefined });
       return done();
     }
 
@@ -420,7 +420,7 @@ export function applyAction(state: AppState, action: Action, actorId: string, no
       });
       const prev = st.approvedScore;
       st.approvedScore = action.score;
-      log({ action: "score.override", objectType: "score", objectId: id, objectLabel: stepLabel(r, action.stepNo), roadmapId: r.id, previous: String(prev), next: String(action.score), reason: action.reason });
+      log({ action: "score.override", objectType: "score", objectId: id, objectLabel: stepLabel(r, action.stepNo), stepNo: action.stepNo, roadmapId: r.id, previous: String(prev), next: String(action.score), reason: action.reason });
       return done(id);
     }
 

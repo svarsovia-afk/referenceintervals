@@ -211,7 +211,7 @@ function ImplementationCard({ roadmap }: { roadmap: Roadmap }) {
   const gate = implementationGate(roadmap, state.settings);
   const Icon = roadmap.implementationActive || gate.canActivate ? Unlock : Lock;
   return (
-    <Card className={cn("flex flex-wrap items-center gap-4 p-5", !roadmap.implementationActive && !gate.canActivate && "bg-canvas")}>
+    <Card className={cn("flex flex-col items-start gap-4 p-5 sm:flex-row sm:items-center", !roadmap.implementationActive && !gate.canActivate && "bg-canvas")}>
       <span className={cn("flex h-10 w-10 items-center justify-center rounded-lg", roadmap.implementationActive ? "bg-teal-600 text-white" : "bg-navy-50 text-navy-700")}>
         <Icon className="h-5 w-5" aria-hidden="true" />
       </span>
@@ -288,7 +288,7 @@ export default function RoadmapDashboardPage() {
         </div>
       </Card>
 
-      <div className="grid gap-6 lg:grid-cols-3">
+      <div className="grid gap-6 lg:grid-cols-3 [&>*]:min-w-0">
         <NextActionCard roadmap={roadmap} />
         <OutstandingCard roadmap={roadmap} />
         <MilestonesCard roadmap={roadmap} />

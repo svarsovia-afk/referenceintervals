@@ -15,7 +15,7 @@ import { stepAverage } from "@/domain/durations";
 import { hasPermission } from "@/domain/permissions";
 import { SAMPLE_HISTORY_ROADMAP_ID } from "@/domain/seed";
 import { STEP_TEMPLATES } from "@/domain/stepTemplates";
-import type { AuditAction, PermissionKey, RoleId, Settings } from "@/domain/types";
+import type { AuditAction, AuditEntry, PermissionKey, RoleId, Settings } from "@/domain/types";
 import { useI18n } from "@/i18n/I18nProvider";
 import { errorMessage } from "@/lib/errors";
 import { useApp } from "@/state/AppStateProvider";
@@ -410,13 +410,30 @@ function TimeHistoryTab() {
 }
 
 function AuditTab() {
-  const { t, td, formatDateTime } = useI18n();
+  const { t, td, loc, formatDateTime } = useI18n();
   const { state } = useApp();
   const people = useStakeholderLookup();
   const [action, setAction] = useState<"all" | AuditAction>("all");
   const actions = useMemo(() => [...new Set(state.audit.map((a) => a.action))].sort(), [state.audit]);
   const items = useMemo(() => [...state.audit].filter((a) => action === "all" || a.action === action).reverse(), [state.audit, action]);
   const paged = usePaged(items);
+  const roadmapName = useRoadmapName();
+  /** Labels are rendered in the current language where the object can still be resolved. */
+  const objectLabel = (a: AuditEntry) => {
+    if (a.stepNo && a.roadmapId) return `${roadmapName(a.roadmapId)} · ${t("common.step", { n: a.stepNo })}`;
+    const taskId = a.objectType === "task" ? a.objectId : a.objectType === "duration" ? state.durationRecords.find((d) => d.id === a.objectId)?.taskId : undefined;
+    const task = taskId ? state.tasks.find((x) => x.id === taskId) : undefined;
+    if (task) return loc(task.title);
+    if (a.objectType === "approval") return td(`approvals.items.${a.objectLabel}`);
+    return a.objectLabel ?? a.objectId;
+  };
+  const value = (action: AuditAction, v?: string) => {
+    if (v === undefined) return "—";
+    if (action === "task.statusChanged") return td(`taskStatus.${v}`);
+    if (action === "pathway.changed") return td(`pathway.${v}`);
+    if (action.startsWith("score.") && /^(proposed|reviewed|returned|approved)$/.test(v)) return td(`proposalStatus.${v}`);
+    return v;
+  };
   return (
     <div className="space-y-4">
       <Notice tone="info">{t("settings.auditAppendOnly")}</Notice>
@@ -453,9 +470,9 @@ function AuditTab() {
                     <td className={`${td_} whitespace-nowrap`}>{formatDateTime(a.at)}</td>
                     <td className={td_}>{people.name(a.actorId)}</td>
                     <td className={td_}>{td(`audit.${a.action}`)}</td>
-                    <td className={`${td_} text-xs`}>{a.objectLabel ?? a.objectId}</td>
+                    <td className={`${td_} text-xs`}>{objectLabel(a)}</td>
                     <td className={`${td_} max-w-xs break-words font-mono text-xs text-ink-muted`}>
-                      {a.previous !== undefined || a.next !== undefined ? `${a.previous ?? "—"} → ${a.next ?? "—"}` : "—"}
+                      {a.previous !== undefined || a.next !== undefined ? `${value(a.action, a.previous)} → ${value(a.action, a.next)}` : "—"}
                     </td>
                     <td className={`${td_} max-w-xs text-xs`}>{a.reason ?? "—"}</td>
                   </tr>

@@ -364,6 +364,8 @@ export interface AuditEntry {
   objectId: string;
   objectLabel?: string;
   roadmapId?: string;
+  /** Step the change relates to, for language-independent display. */
+  stepNo?: number;
   previous?: string;
   next?: string;
   reason?: string;
