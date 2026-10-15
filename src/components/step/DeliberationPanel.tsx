@@ -46,7 +46,6 @@ export function DeliberationPanel({ roadmap, stepNo }: { roadmap: Roadmap; stepN
 
   // Re-sync only when the stored record actually changes (state is cloned on every action).
   const stored = JSON.stringify(step.deliberation);
-  // eslint-disable-next-line react-hooks/exhaustive-deps
   useEffect(() => setDraft(JSON.parse(stored)), [stored]);
 
   const save = (e: React.FormEvent) => {

@@ -23,7 +23,6 @@ export function MatrixEditor({ roadmap, readOnly }: { roadmap: Roadmap; readOnly
   const [draft, setDraft] = useState<WeightedMatrix>(roadmap.matrix);
   const [error, setError] = useState<string>();
   const stored = JSON.stringify(roadmap.matrix);
-  // eslint-disable-next-line react-hooks/exhaustive-deps
   useEffect(() => setDraft(JSON.parse(stored)), [stored]);
 
   const editable =

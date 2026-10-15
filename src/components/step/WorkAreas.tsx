@@ -226,7 +226,6 @@ export function ProcurementEditor({ roadmap }: { roadmap: Roadmap }) {
   const { run, error } = useRun();
   const [draft, setDraft] = useState<ProcurementInfo>(roadmap.procurement);
   const key = JSON.stringify(roadmap.procurement);
-  // eslint-disable-next-line react-hooks/exhaustive-deps
   useEffect(() => setDraft(JSON.parse(key)), [key]);
   return (
     <Card>
