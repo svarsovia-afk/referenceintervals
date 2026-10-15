@@ -7,6 +7,10 @@ RSV prevention in infants is seeded as the first case study. The platform is reu
 > **Prototype — not a production system.**
 > All data lives only in the current browser (IndexedDB). There is **no synchronization** between users or computers, the demo sign-in is **not authentication**, and permission checks run in the browser only. Use aggregated and anonymized information only — **never patient-level or identifiable health data**. A discreet "Prototype" indicator in the header repeats this.
 
+## Screenshots
+
+Key screens (fictional sample data) are in [`docs/screenshots/`](docs/screenshots/), for example the [dashboard](docs/screenshots/01-dashboard-nl.png) and the [Step 3 matrix](docs/screenshots/04-step3-matrix.png).
+
 ## Running it
 
 Requirements: Node.js 20+ (tested with Node 22).
