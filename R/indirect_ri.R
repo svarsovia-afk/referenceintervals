@@ -103,7 +103,7 @@ tweedelijns_artsen <- c(
 )
 
 # ---- 5. stratificatie ----
-stratify        <- FALSE        # FALSE = \u00e9\u00e9n groep "All"
+stratify        <- FALSE        # FALSE = een groep "All"
 stratify_by_sex <- TRUE         # alleen gebruikt als stratify = TRUE
 age_breaks      <- NULL         # bv. c(18, 50, 120) -> [18,50) en [50,120); NULL = niet op leeftijd
 # Eigen strata (overschrijven geslacht/leeftijd). Elke regel is een voorwaarde
