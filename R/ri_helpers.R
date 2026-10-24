@@ -86,13 +86,21 @@ fmt_num <- function(x, d) formatC(x, format = "f", digits = d)
 
 # Eén kolom van de tabel: samenvatting van één groep.
 # `analytes`: tabel met kolommen analyte, unit, digits en optioneel label.
-summarise_group <- function(d, include_sex = TRUE, analytes = table_analytes) {
+summarise_group <- function(d, include_sex = TRUE, analytes = table_analytes,
+                            include_zorglijn = FALSE) {
   n   <- nrow(d)
   age <- d$Age[!is.na(d$Age)]
   rows <- c()
   if (include_sex) {
     n_m <- sum(d$Geslacht == "M", na.rm = TRUE)
     rows["Sex, male, n (%)"] <- sprintf("%d (%s)", n_m, fmt_num(100 * n_m / n, 1))
+  }
+  if (include_zorglijn && "Zorglijn" %in% names(d)) {
+    zl <- d$Zorglijn
+    care <- c("Care line: primary, n (%)"   = sum(zl %in% "Eerstelijnszorg"),
+              "Care line: secondary, n (%)" = sum(zl %in% "Tweedelijnszorg"))
+    care["Care line: unknown, n (%)"] <- n - sum(care)
+    for (nm in names(care)) rows[nm] <- sprintf("%d (%s)", care[[nm]], fmt_num(100 * care[[nm]] / n, 1))
   }
   rows["Age (years), mean [range]"] <- if (length(age) == 0) "\u2013" else
     sprintf("%s [%s\u2013%s]", fmt_num(mean(age), 1), fmt_num(min(age), 0), fmt_num(max(age), 0))
@@ -118,7 +126,7 @@ summarise_group <- function(d, include_sex = TRUE, analytes = table_analytes) {
 # Tabel: rijen = parameters, kolommen = groepen + Total (kop bevat n)
 describe_population <- function(d, group_col, group_levels = NULL, group_labels = NULL,
                                 include_sex = TRUE, total_label = "Total",
-                                analytes = table_analytes) {
+                                analytes = table_analytes, include_zorglijn = FALSE) {
   g <- as.character(d[[group_col]])
   g[is.na(g)] <- "Unknown"
   if (is.null(group_levels)) group_levels <- sort(unique(g))
@@ -128,7 +136,8 @@ describe_population <- function(d, group_col, group_levels = NULL, group_labels 
               setNames(list(d), total_label))
   # alleen één groep: geen aparte Total-kolom nodig
   if (length(group_levels) == 1) groups <- groups[1]
-  cols <- lapply(groups, summarise_group, include_sex = include_sex, analytes = analytes)
+  cols <- lapply(groups, summarise_group, include_sex = include_sex, analytes = analytes,
+                 include_zorglijn = include_zorglijn)
 
   tab <- tibble::tibble(Characteristic = names(cols[[1]]))
   for (nm in names(groups)) {

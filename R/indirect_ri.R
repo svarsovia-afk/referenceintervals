@@ -789,6 +789,7 @@ population_table <- describe_population(
   data |> mutate(Stratum = as.character(Stratum)), "Stratum",
   group_levels = strata,
   include_sex = !(stratify && is.null(custom_strata) && stratify_by_sex),
+  include_zorglijn = TRUE,
   analytes = table_analytes
 )
 attr(population_table, "title") <- paste0("Reference population ", analyte, " (", lab_name,
@@ -798,11 +799,26 @@ attr(population_table, "note") <- paste(
   "n = number of results when not available for all subjects.")
 print(population_table, width = Inf)
 
+# Alle uitslagen van de analyt (na stap 0, voor screening/herhaalfilters), per zorglijn
+all_requests_table <- describe_population(
+  data_all |> filter(!is.na(Value)), "Zorglijn",
+  group_levels = c("Eerstelijnszorg", "Tweedelijnszorg", "Onbekend"),
+  group_labels = c(Eerstelijnszorg = "Primary care", Tweedelijnszorg = "Secondary care",
+                   Onbekend = "Unknown"),
+  include_sex = TRUE,
+  analytes = table_analytes
+)
+attr(all_requests_table, "title") <- paste0("All ", analyte, " results (", lab_name,
+                                           "), by care line - tests, not unique patients")
+attr(all_requests_table, "note") <- attr(population_table, "note")
+print(all_requests_table, width = Inf)
+
 attr(flow, "title") <- paste0("Flowchart ", analyte, " (", lab_name, ")")
 attr(flow, "note")  <- "rows/patients_excluded = excluded compared with the previous step."
 
 tables <- list(
   "Flowchart"      = flow,
+  "All requests"   = all_requests_table,
   "Population"     = population_table,
   "N per stratum"  = n_per_stratum,
   "Screening"      = screening_counts,
