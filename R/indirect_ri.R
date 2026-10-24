@@ -87,6 +87,12 @@ typearts_file <- "TypeArts.csv" # Aanvrager -> Type_Arts; NULL als Zorglijn al i
 typearts_sep  <- ";"
 zorglijn_keep <- "Eerstelijnszorg"  # bv. c("Eerstelijnszorg", "Onbekend"); NULL = alle
 
+# Aanvragers die niet in TypeArts staan, of een Type_Arts zonder zorglijn:
+#   TRUE  = script stopt en maakt <TypeArts-naam>_aanvulling.xlsx om in te vullen;
+#           daarna opnieuw draaien (ingevulde regels worden dan meegenomen)
+#   FALSE = doorgaan; deze rijen krijgen Zorglijn "Onbekend"
+stop_on_missing_typearts <- TRUE
+
 eerstelijns_artsen <- c(
   "BGD-arts", "Huisarts", "Klinisch Chemicus", "Marinearts", "Marine-Arts", "Vliegarts",
   "Patient is aanvrager"
@@ -462,6 +468,38 @@ if (!"Zorglijn" %in% names(data)) {
     TypeArts <- read.csv(typearts_file, sep = typearts_sep, stringsAsFactors = FALSE) |>
       transmute(Aanvrager = trimws(Aanvrager), Type_Arts = trimws(Type_Arts)) |>
       distinct(Aanvrager, .keep_all = TRUE)
+
+    # ---- aanvullingen uit een eerder ingevuld Excel-bestand ----
+    fill_file <- paste0(tools::file_path_sans_ext(typearts_file), "_aanvulling.xlsx")
+    has_openxlsx <- requireNamespace("openxlsx", quietly = TRUE)
+    read_fill <- function(sheet, cols) {
+      empty <- as_tibble(setNames(rep(list(character()), length(cols)), cols))
+      if (!file.exists(fill_file) || !has_openxlsx) return(empty)
+      x <- tryCatch(openxlsx::read.xlsx(fill_file, sheet = sheet, skipEmptyCols = FALSE),
+                    error = function(e) NULL)
+      if (is.null(x) || nrow(x) == 0) return(empty)
+      for (cc in cols) if (!cc %in% names(x)) x[[cc]] <- NA
+      as_tibble(x[cols]) |> mutate(across(everything(), ~ na_if(trimws(as.character(.x)), "")))
+    }
+    fill_aanvr <- read_fill("Aanvragers", c("Aanvrager", "n_rijen", "Type_Arts"))
+    fill_types <- read_fill("Types", c("Type_Arts", "n_rijen", "Zorglijn"))
+
+    if (nrow(fill_aanvr) > 0 || nrow(fill_types) > 0) {
+      message("Aanvullingen gelezen uit ", fill_file)
+      # TypeArts.csv gaat voor; ingevulde aanvragers worden toegevoegd
+      TypeArts <- bind_rows(TypeArts,
+                            fill_aanvr |> filter(!is.na(Type_Arts)) |> select(Aanvrager, Type_Arts)) |>
+        distinct(Aanvrager, .keep_all = TRUE)
+      zl <- tolower(fill_types$Zorglijn)
+      eerstelijns_artsen <- union(eerstelijns_artsen, fill_types$Type_Arts[zl %in% "eerstelijnszorg"])
+      tweedelijns_artsen <- union(tweedelijns_artsen, fill_types$Type_Arts[zl %in% "tweedelijnszorg"])
+      bad <- fill_types |> filter(!is.na(Zorglijn), !tolower(Zorglijn) %in% c("eerstelijnszorg", "tweedelijnszorg"))
+      if (nrow(bad) > 0) {
+        warning("Onbekende Zorglijn in ", fill_file, " (gebruik Eerstelijnszorg of Tweedelijnszorg): ",
+                paste(unique(bad$Zorglijn), collapse = ", "), call. = FALSE)
+      }
+    }
+
     data <- data |>
       left_join(TypeArts, by = "Aanvrager", relationship = "many-to-one") |>
       mutate(Zorglijn = case_when(
@@ -469,11 +507,72 @@ if (!"Zorglijn" %in% names(data)) {
         Type_Arts %in% tweedelijns_artsen ~ "Tweedelijnszorg",
         TRUE                              ~ "Onbekend"
       ))
-    # Ontbrekende aanvragers / types ter controle wegschrijven
-    data |> filter(is.na(Type_Arts)) |> count(Aanvrager, name = "n_rijen") |>
-      arrange(desc(n_rijen)) |> write.csv(out("aanvragers_zonder_type_arts.csv"), row.names = FALSE)
-    data |> filter(!is.na(Type_Arts), Zorglijn == "Onbekend") |> count(Type_Arts, name = "n_rijen") |>
-      write.csv(out("type_arts_zonder_zorglijn.csv"), row.names = FALSE)
+
+    # ---- wat ontbreekt nog? ----
+    missing_aanvr <- data |>
+      filter(is.na(Type_Arts), !is.na(Aanvrager), Aanvrager != "") |>
+      count(Aanvrager, name = "n_rijen") |> arrange(desc(n_rijen))
+    missing_types <- data |>
+      filter(!is.na(Type_Arts), Zorglijn == "Onbekend") |>
+      count(Type_Arts, name = "n_rijen") |> arrange(desc(n_rijen))
+    n_no_aanvrager <- sum(is.na(data$Aanvrager) | data$Aanvrager == "")
+    if (n_no_aanvrager > 0) {
+      message(n_no_aanvrager, " rijen zonder Aanvrager krijgen Zorglijn 'Onbekend'.")
+    }
+
+    if (nrow(missing_aanvr) > 0 || nrow(missing_types) > 0) {
+      # Bestand = nog in te vullen regels bovenaan + eerder ingevulde regels (blijven bewaard)
+      sheet_aanvr <- bind_rows(
+        missing_aanvr |> mutate(n_rijen = as.character(n_rijen), Type_Arts = NA_character_),
+        fill_aanvr |> filter(!is.na(Type_Arts), !Aanvrager %in% missing_aanvr$Aanvrager)
+      ) |> mutate(n_rijen = suppressWarnings(as.integer(n_rijen)))
+      sheet_types <- bind_rows(
+        missing_types |> mutate(n_rijen = as.character(n_rijen), Zorglijn = NA_character_),
+        fill_types |> filter(!is.na(Zorglijn), !Type_Arts %in% missing_types$Type_Arts)
+      ) |> mutate(n_rijen = suppressWarnings(as.integer(n_rijen)))
+      uitleg <- tibble(Uitleg = c(
+        "Tabblad Aanvragers: vul per aanvrager de kolom Type_Arts in (bv. Huisarts, Internist).",
+        "Tabblad Types: vul per Type_Arts de kolom Zorglijn in: Eerstelijnszorg of Tweedelijnszorg.",
+        "Lege regels blijven 'Onbekend'. Sla het bestand op en draai het script opnieuw.",
+        "Een nieuw Type_Arts verschijnt na de volgende run in het tabblad Types.",
+        "",
+        paste("Bekende eerstelijns types:", paste(eerstelijns_artsen, collapse = ", ")),
+        paste("Bekende tweedelijns types:", paste(tweedelijns_artsen, collapse = ", "))
+      ))
+
+      msg <- sprintf(paste0("%d aanvrager(s) zonder Type_Arts (%d rijen) en %d Type_Arts zonder zorglijn ",
+                            "(%d rijen).\nVul ze aan in: %s"),
+                     nrow(missing_aanvr), sum(missing_aanvr$n_rijen),
+                     nrow(missing_types), sum(missing_types$n_rijen), normalizePath(fill_file, mustWork = FALSE))
+      if (has_openxlsx) {
+        wb <- openxlsx::createWorkbook()
+        fill_style <- openxlsx::createStyle(fgFill = "#FFF2CC")
+        head_style <- openxlsx::createStyle(textDecoration = "bold", border = "Bottom")
+        for (sh in list(list("Aanvragers", sheet_aanvr, 3), list("Types", sheet_types, 3),
+                        list("Uitleg", uitleg, NA))) {
+          openxlsx::addWorksheet(wb, sh[[1]])
+          openxlsx::writeData(wb, sh[[1]], as.data.frame(sh[[2]]), headerStyle = head_style)
+          if (!is.na(sh[[3]]) && nrow(sh[[2]]) > 0) {
+            openxlsx::addStyle(wb, sh[[1]], fill_style, rows = 1 + seq_len(nrow(sh[[2]])),
+                               cols = sh[[3]], gridExpand = TRUE)
+          }
+          openxlsx::setColWidths(wb, sh[[1]], cols = seq_len(ncol(sh[[2]])),
+                                 widths = if (sh[[1]] == "Uitleg") 120 else c(40, 10, 25))
+        }
+        openxlsx::saveWorkbook(wb, fill_file, overwrite = TRUE)
+      } else {
+        write.csv(sheet_aanvr, sub("\\.xlsx$", "_aanvragers.csv", fill_file), row.names = FALSE)
+        write.csv(sheet_types, sub("\\.xlsx$", "_types.csv", fill_file), row.names = FALSE)
+        msg <- paste0(msg, "\nLet op: installeer 'openxlsx' om het ingevulde bestand te kunnen inlezen; ",
+                      "nu zijn alleen CSV's ter controle gemaakt.")
+      }
+
+      if (stop_on_missing_typearts && has_openxlsx) {
+        stop(msg, "\nDraai het script daarna opnieuw, of zet stop_on_missing_typearts <- FALSE ",
+             "om deze rijen als 'Onbekend' mee te nemen.", call. = FALSE)
+      }
+      warning(msg, "\nDeze rijen krijgen nu Zorglijn 'Onbekend'.", call. = FALSE)
+    }
   } else {
     data$Zorglijn <- "Onbekend"
     if (!is.null(zorglijn_keep)) {
