@@ -8,6 +8,10 @@
 library(dplyr)
 library(tidyr)
 
+# Versie van dit bestand; de scripts controleren dit zodat een oude kopie van
+# ri_helpers.R een duidelijke melding geeft i.p.v. een "unused argument"-fout.
+ri_helpers_version <- 2L
+
 # Populatienaam -> veilig stukje bestandsnaam ("Alle aanvragers" -> "alle_aanvragers")
 file_tag <- function(x) gsub("[^a-z0-9]+", "_", tolower(x))
 

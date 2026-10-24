@@ -164,6 +164,12 @@ local({
   hit <- cands[file.exists(cands)][1]
   if (is.na(hit)) stop("ri_helpers.R niet gevonden; zet het in dezelfde map als dit script.")
   source(hit)
+  if (!exists("ri_helpers_version") || ri_helpers_version < 2L) {
+    stop("ri_helpers.R is verouderd (", normalizePath(hit), ").\n",
+         "Vervang het door de nieuwste versie en verwijder oudere kopieen uit de werkmap.",
+         call. = FALSE)
+  }
+  message("Hulpfuncties geladen uit: ", hit)
 })
 
 dir.create(output_dir, recursive = TRUE, showWarnings = FALSE)
