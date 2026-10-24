@@ -22,6 +22,7 @@ rm(list = ls())
 #  7. Flagging rate oude vs nieuwe RI's in de ORIGINELE dataset (alle PROL-waarden)
 #
 # install.packages(c("tidyverse", "openxlsx"))   # dplyr >= 1.1.0 vereist
+# Vereist R/ri_helpers.R in dezelfde map als dit script.
 # =============================================================================
 
 library(dplyr)
@@ -123,134 +124,20 @@ status_labels <- c(Men = "Men", premenopausal = "Premenopausal women",
 dir.create(output_dir, recursive = TRUE, showWarnings = FALSE)
 out <- function(file) file.path(output_dir, paste0(lab_name, "_", file))
 
-# Populatienaam -> veilig stukje bestandsnaam ("Alle aanvragers" -> "alle_aanvragers")
-file_tag <- function(x) gsub("[^a-z0-9]+", "_", tolower(x))
-
-# ---- beschrijvende tabel ----
-fmt_num <- function(x, d) formatC(x, format = "f", digits = d)
-
-# Eén kolom van de tabel: samenvatting van één groep
-summarise_group <- function(d, include_sex = TRUE) {
-  n   <- nrow(d)
-  age <- d$Age[!is.na(d$Age)]
-  rows <- c()
-  if (include_sex) {
-    n_m <- sum(d$Geslacht == "M", na.rm = TRUE)
-    rows["Sex, male, n (%)"] <- sprintf("%d (%s)", n_m, fmt_num(100 * n_m / n, 1))
-  }
-  rows["Age (years), mean [range]"] <- if (length(age) == 0) "\u2013" else
-    sprintf("%s [%s\u2013%s]", fmt_num(mean(age), 1), fmt_num(min(age), 0), fmt_num(max(age), 0))
-  rows["Age (years), median"] <- if (length(age) == 0) "\u2013" else fmt_num(median(age), 1)
-
-  for (i in seq_len(nrow(table_analytes))) {
-    a <- table_analytes$analyte[i]
-    dg <- table_analytes$digits[i]
-    x <- d[[a]][!is.na(d[[a]])]
-    label <- sprintf("%s (%s), median [Q1\u2013Q3]", a, table_analytes$unit[i])
-    val <- if (length(x) == 0) "\u2013" else {
-      q <- quantile(x, c(0.25, 0.5, 0.75), names = FALSE)
-      sprintf("%s [%s\u2013%s]", fmt_num(q[2], dg), fmt_num(q[1], dg), fmt_num(q[3], dg))
-    }
-    # aantal meetwaarden vermelden als niet iedereen deze analyt heeft
-    if (length(x) > 0 && length(x) < n) val <- sprintf("%s (n = %d)", val, length(x))
-    rows[label] <- val
-  }
-  rows
-}
-
-# Tabel: rijen = parameters, kolommen = groepen + Total (kop bevat n)
-describe_population <- function(d, group_col, group_levels = NULL, group_labels = NULL,
-                                include_sex = TRUE, total_label = "Total") {
-  g <- as.character(d[[group_col]])
-  g[is.na(g)] <- "Unknown"
-  if (is.null(group_levels)) group_levels <- sort(unique(g))
-  group_levels <- intersect(c(group_levels, "Unknown"), unique(g))
-
-  groups <- c(lapply(setNames(group_levels, group_levels), function(l) d[g == l, , drop = FALSE]),
-              setNames(list(d), total_label))
-  cols <- lapply(groups, summarise_group, include_sex = include_sex)
-
-  tab <- tibble::tibble(Characteristic = names(cols[[1]]))
-  for (nm in names(groups)) {
-    lab <- if (!is.null(group_labels) && nm %in% names(group_labels)) group_labels[[nm]] else nm
-    tab[[sprintf("%s (n = %d)", lab, nrow(groups[[nm]]))]] <- unname(cols[[nm]])
-  }
-  tab
-}
-
-# Lijst met tabellen -> één Excel-bestand, één tabblad per tabel
-write_publication_tables <- function(tables, file, note) {
-  if (requireNamespace("openxlsx", quietly = TRUE)) {
-    wb <- openxlsx::createWorkbook()
-    header_style <- openxlsx::createStyle(textDecoration = "bold", border = "TopBottom",
-                                          halign = "center", wrapText = TRUE)
-    first_col    <- openxlsx::createStyle(halign = "left")
-    for (nm in names(tables)) {
-      sheet <- substr(gsub("[\\[\\]\\*\\?/\\\\:]", "", nm), 1, 31)
-      tab <- tables[[nm]]
-      openxlsx::addWorksheet(wb, sheet)
-      title <- if (!is.null(attr(tab, "title"))) attr(tab, "title") else nm
-      openxlsx::writeData(wb, sheet, title, startRow = 1)
-      openxlsx::addStyle(wb, sheet, openxlsx::createStyle(textDecoration = "bold"), rows = 1, cols = 1)
-      openxlsx::writeData(wb, sheet, tab, startRow = 3, headerStyle = header_style)
-      openxlsx::addStyle(wb, sheet, openxlsx::createStyle(border = "Bottom"),
-                         rows = nrow(tab) + 3, cols = seq_len(ncol(tab)), stack = TRUE)
-      openxlsx::addStyle(wb, sheet, first_col, rows = 4:(nrow(tab) + 3), cols = 1, stack = TRUE)
-      openxlsx::addStyle(wb, sheet, openxlsx::createStyle(halign = "center"),
-                         rows = 4:(nrow(tab) + 3), cols = 2:ncol(tab),
-                         gridExpand = TRUE, stack = TRUE)
-      openxlsx::writeData(wb, sheet, note, startRow = nrow(tab) + 5)
-      openxlsx::addStyle(wb, sheet, openxlsx::createStyle(textDecoration = "italic"),
-                         rows = nrow(tab) + 5, cols = 1)
-      openxlsx::setColWidths(wb, sheet, cols = 1, widths = 34)
-      openxlsx::setColWidths(wb, sheet, cols = 2:ncol(tab), widths = 24)
-    }
-    openxlsx::saveWorkbook(wb, file, overwrite = TRUE)
-  } else if (requireNamespace("writexl", quietly = TRUE)) {
-    writexl::write_xlsx(tables, file)
-  } else {
-    warning("Installeer 'openxlsx' (of 'writexl') voor Excel-uitvoer; tabellen opgeslagen als CSV.",
-            call. = FALSE)
-    for (nm in names(tables)) {
-      write.csv(tables[[nm]], sub("\\.xlsx$", paste0("_", file_tag(nm), ".csv"), file),
-                row.names = FALSE)
-    }
-    return(invisible(NULL))
-  }
-  message("Populatietabellen opgeslagen: ", file)
-}
-
-# Labwaarden robuust naar getal: komma als decimaalteken, spaties, en censored
-# waarden zoals "<0.1" of ">100" (krijgen de grenswaarde).
-to_numeric_lab <- function(x, name = "") {
-  if (is.numeric(x)) return(x)
-  x_chr <- trimws(as.character(x))
-  x_chr <- gsub(",", ".", x_chr, fixed = TRUE)
-  x_chr <- gsub("^[<>]=?\\s*", "", x_chr)
-  x_chr[x_chr == ""] <- NA
-  res <- suppressWarnings(as.numeric(x_chr))
-  lost <- unique(x_chr[!is.na(x_chr) & is.na(res)])
-  if (length(lost) > 0) {
-    warning(name, ": ", sum(!is.na(x_chr) & is.na(res)),
-            " waarde(n) niet om te zetten naar getal (worden NA), bv: ",
-            paste(head(lost, 5), collapse = ", "), call. = FALSE)
-  }
-  res
-}
-
-# Eerste test houden, daarna alleen tests >= min_days na de laatst BEHOUDEN test.
-keep_one_per_period <- function(dates, min_days) {
-  keep <- logical(length(dates))
-  last_kept <- -Inf
-  d <- as.numeric(dates)
-  for (i in seq_along(d)) {
-    if (d[i] - last_kept >= min_days) {
-      keep[i] <- TRUE
-      last_kept <- d[i]
-    }
-  }
-  keep
-}
+# Gedeelde functies (to_numeric_lab, log_step, percentile_ci, populatietabel)
+local({
+  this <- tryCatch(sys.frame(1)$ofile, error = function(e) NULL)
+  args <- commandArgs(FALSE)
+  f <- sub("^--file=", "", args[grepl("^--file=", args)])
+  if (length(f)) this <- f[1]
+  if (is.null(this) && requireNamespace("rstudioapi", quietly = TRUE) &&
+      rstudioapi::isAvailable()) this <- rstudioapi::getSourceEditorContext()$path
+  cands <- c(if (!is.null(this) && nzchar(this)) file.path(dirname(this), "ri_helpers.R"),
+             "ri_helpers.R", file.path("R", "ri_helpers.R"))
+  hit <- cands[file.exists(cands)][1]
+  if (is.na(hit)) stop("ri_helpers.R niet gevonden; zet het in dezelfde map als dit script.")
+  source(hit)
+})
 
 # Indeling in RI-groepen. Vrouwen > 50 zonder FSH kunnen niet ingedeeld worden.
 assign_status <- function(d) {
@@ -264,16 +151,6 @@ assign_status <- function(d) {
       Age < 18                                ~ "exclude",
       TRUE                                    ~ "unknown"
     ))
-}
-
-# Exclusie-log (flowchart); wordt per populatie opnieuw gestart
-flow <- tibble(step = character(), n_rows = integer(), n_patients = integer())
-log_step <- function(df, step) {
-  flow <<- bind_rows(flow, tibble(step = step, n_rows = nrow(df),
-                                  n_patients = n_distinct(df$Unique_Pt_ID)))
-  message(sprintf("%-55s rijen: %7d  patienten: %6d",
-                  step, nrow(df), n_distinct(df$Unique_Pt_ID)))
-  invisible(df)
 }
 
 # =============================================================================
@@ -520,19 +397,6 @@ write_publication_tables(
 # =============================================================================
 # 6. VALIDATIE NIEUWE RI'S: observed p95 (met BI) vs 95%-BI van het nieuwe RI
 # =============================================================================
-
-# Non-parametrisch BI voor een percentiel (Reed, Henry & Mason 1971; CLSI EP28-A3c)
-percentile_ci <- function(x, p = 0.95, conf_level = 0.95) {
-  x <- sort(x[!is.na(x)])
-  n <- length(x)
-  if (n == 0) return(tibble::tibble(p_est = NA_real_, ci_low = NA_real_, ci_high = NA_real_))
-  z <- qnorm(1 - (1 - conf_level) / 2)
-  se <- sqrt(n * p * (1 - p))
-  lower_rank <- max(1, floor(n * p - z * se))
-  upper_rank <- min(n, ceiling(n * p + z * se) + 1)
-  tibble::tibble(p_est = quantile(x, p, names = FALSE),
-                 ci_low = x[lower_rank], ci_high = x[upper_rank])
-}
 
 # Alle populaties onder elkaar, met Populatie als kolom
 plot_df_all <- bind_rows(ref_pops) |>
